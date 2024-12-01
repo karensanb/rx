@@ -1,0 +1,113 @@
+from machine import Pin, SPI
+from nrf24l01 import NRF24L01
+import network
+import urequests
+import time
+import struct
+
+# Configuracion Wi-Fi
+SSID = "UMMG-PUBR-CLL100"
+PASSWORD = ""
+
+# Configuracion Telegram
+BOT_TOKEN = "7781579627:AAHxeY7wp_CYjqTx5Q6PQUwtU0ZWVeNLFQQ"
+CHAT_ID = "7040141396"
+
+# Configuracion NRF24L01
+csn = Pin(15, mode=Pin.OUT, value=1)
+ce = Pin(14, mode=Pin.OUT, value=0)
+pipes = (b"\xa5\xf0\xf0\xf0\xf0", b"\xa5\xf0\xf0\xf0\xf0")
+
+# Variables globales para datos del sensor
+sensor_data = {
+    'humedad_tierra': 0.0,
+    'temperatura': 0.0,
+    'humedad_ambiente': 0.0,
+    'luz': 0.0,
+    'last_update': 0
+}
+
+def setup_nrf():
+    nrf = NRF24L01(SPI(0), csn, ce, channel=100, payload_size=32)
+    nrf_setup = 0b00100110  # Configurar a 250 kbps
+    nrf.reg_write(0x06, nrf_setup)
+    nrf.open_tx_pipe(pipes[0])
+    nrf.open_rx_pipe(1, pipes[1])
+    nrf.start_listening()
+    return nrf
+
+def conectar_wifi(ssid, password):
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(ssid, password)
+    
+    print("Conectando a Wi-Fi...")
+    while not wlan.isconnected():
+        time.sleep(0.5)
+        print(".", end="")
+    print("\nConectado a Wi-Fi!")
+    print("Direccion IP:", wlan.ifconfig()[0])
+
+def procesar_datos_sensor(message):
+    try:
+        # El mensaje recibido tiene el formato: SOIL:<valor>|TEMP:<valor>|HUM:<valor>|LUX:<valor>
+        # Lo primero es decodificar el mensaje de bytes a string
+        message_str = message.decode('utf-8')
+        
+        # Extraer los datos del mensaje usando el delimitador "|"
+        data_parts = message_str.split('|')
+        
+        # Extraer cada valor
+        soil = float(data_parts[0].split(':')[1])  # SOIL:1.6 -> 1.6
+        temp = float(data_parts[1].split(':')[1])  # TEMP:23 -> 23
+        hum = float(data_parts[2].split(':')[1])   # HUM:45 -> 45
+        lux = float(data_parts[3].split(':')[1])   # LUX:63.3 -> 63.3
+
+        # Actualizar los datos del sensor
+        sensor_data['humedad_tierra'] = round(soil, 1)
+        sensor_data['temperatura'] = round(temp, 1)
+        sensor_data['humedad_ambiente'] = round(hum, 1)
+        sensor_data['luz'] = round(lux, 1)
+        sensor_data['last_update'] = time.time()
+
+        print("Datos actualizados:", sensor_data)
+        return True
+        
+    except Exception as e:
+        print("Error procesando datos del sensor:", e)
+        return False
+
+def verificar_datos_validos():
+    return time.time() - sensor_data['last_update'] <= 300  # 5 minutos
+
+def formatear_datos_sensor():
+    return {
+        'humedad de la tierra': f"{sensor_data['humedad_tierra']}%",
+        'temperatura': f"{sensor_data['temperatura']}C",
+        'humedad ambiente': f"{sensor_data['humedad_ambiente']}%",
+        'luz': f"{sensor_data['luz']}"
+    }
+
+def obtener_mensaje_datos():
+    if not verificar_datos_validos():
+        return "No hay datos validos disponibles del sensor. Por favor verifica que el dispositivo transmisor este funcionando correctamente."
+    datos_formateados = formatear_datos_sensor()
+    return f"""Valores actuales:
+Humedad del suelo: {datos_formateados['humedad de la tierra']}
+Temperatura: {datos_formateados['temperatura']}
+Humedad ambiente: {datos_formateados['humedad ambiente']}
+Nivel de luz: {datos_formateados['luz']}"""
+
+# Función para mostrar el menú principal
+def mostrar_menu_principal():
+    menu_texto = (
+        "Menu principal:\n"
+        "1. Estado general de tu planta\n"
+        "2. Consultar temperatura\n"
+        "3. Verificar necesidad de riego\n"
+        "4. Mostrar valores actuales\n"
+        "5. Sensores disponibles\n"
+        "6. Ayuda\n"
+        "Por favor, selecciona una opcion enviando el numero correspondiente."
+    )
+    enviar_mensaje(menu_texto)
