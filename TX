@@ -1,1 +1,84 @@
+from machine import ADC, Pin, SPI, I2C
+from nrf24l01 import NRF24L01
+import struct
+import utime
+import time
+import dht
 
+# Dirección I2C del BH1750 y comando de inicio de medición
+BH1750_ADDR = 0x23
+BH1750_CMD_CON = 0x10
+
+# Clase para el sensor BH1750
+class BH1750:
+    def _init(self, i2c, address=BH1750_ADDR):  # Cambié _init por _init_
+        self.i2c = i2c
+        self.address = address
+
+    def read_light(self):
+        try:
+            self.i2c.writeto(self.address, bytes([BH1750_CMD_CON]))
+            time.sleep(0.18)
+            data = self.i2c.readfrom(self.address, 2)
+            lux = (data[0] << 8 | data[1]) / 1.2
+            return round(lux, 2)
+        except OSError:
+            return -1
+
+# Configuración de sensores
+sensor_humedad = ADC(Pin(26))  # Sensor YL-100
+sensor_dht11 = dht.DHT11(Pin(22))  # Sensor DHT11
+i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=100000)
+sensor_luz = BH1750(i2c)
+
+# Funciones para leer los sensores
+def leer_humedad_yl100():
+    valor_raw = sensor_humedad.read_u16()
+    humedad = 100 - ((valor_raw / 65535) * 100)
+    return round(humedad, 2)
+
+def leer_temperatura_y_humedad_dht11():
+    try:
+        sensor_dht11.measure()
+        return sensor_dht11.temperature(), sensor_dht11.humidity()
+    except OSError:
+        return None, None
+
+def leer_intensidad_luz_bh1750():
+    return sensor_luz.read_light()
+
+# Configuración del NRF24L01
+csn = Pin(15, mode=Pin.OUT, value=1)
+ce = Pin(14, mode=Pin.OUT, value=0)
+pipes = (b"\xa5\xf0\xf0\xf0\xf0", b"\xa5\xf0\xf0\xf0\xf1")
+
+def setup():
+    nrf = NRF24L01(SPI(0), csn, ce, channel=100, payload_size=32)
+    nrf.reg_write(0x06, 0b00100110)  # Configuración a 250 kbps
+    nrf.open_tx_pipe(pipes[0])
+    nrf.open_rx_pipe(1, pipes[1])
+    return nrf
+
+# Transmisión de datos
+def transmitir_datos(nrf):
+    while True:
+        humedad_yl100 = leer_humedad_yl100()
+        temperatura, humedad_dht11 = leer_temperatura_y_humedad_dht11()
+        lux = leer_intensidad_luz_bh1750()
+
+        if temperatura is not None and humedad_dht11 is not None and lux != -1:
+            mensaje = f"SOIL:{humedad_yl100:.1f}|TEMP:{temperatura}|HUM:{humedad_dht11}|LUX:{lux:.1f}"
+        else:
+            mensaje = f"SOIL:{humedad_yl100:.1f}|ERROR"
+
+        try:
+            nrf.stop_listening()
+            print("Transmitting:", mensaje)
+            nrf.send(struct.pack("32s", mensaje.encode()))
+        except OSError:
+            print("Error: No se pudo transmitir")
+        utime.sleep(2)
+
+# Inicialización y transmisión
+nrf = setup()
+transmitir_datos(nrf)
