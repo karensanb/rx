@@ -111,3 +111,90 @@ def mostrar_menu_principal():
         "Por favor, selecciona una opcion enviando el numero correspondiente."
     )
     enviar_mensaje(menu_texto)
+# Función para enviar mensajes a Telegram
+def enviar_mensaje(mensaje):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": mensaje}
+    try:
+        response = urequests.post(url, json=data)
+        response.close()
+        print("Mensaje enviado a Telegram")
+    except Exception as e:
+        print("Error al enviar mensaje:", e)
+
+# Función para manejar el menú y submenú
+def manejar_menu(mensaje, estado_usuario):
+    if estado_usuario == "main_menu":
+        if mensaje == "1":
+            enviar_mensaje("Estado general de la planta: tu planta esta saludable.\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "2":
+            enviar_mensaje(f"La temperatura actual es {sensor_data['temperatura']}C.\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "3":
+            enviar_mensaje("Tu planta no necesita agua por ahora.\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "4":
+            enviar_mensaje(obtener_mensaje_datos() + "\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "5":
+            enviar_mensaje("Sensores disponibles:\n- Humedad del suelo\n- Temperatura\n- Humedad ambiente\n- Nivel de luz\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "6":
+            enviar_mensaje("Ayuda: Selecciona una opcion del menu enviando su numero correspondiente.\n7. Volver al menu principal.")
+            return "main_menu"  # Volver al menú principal
+        elif mensaje == "7":  # Cambio: Volver al menú principal
+            mostrar_menu_principal()
+            return "main_menu"
+        else:
+            # Eliminar el mensaje "Opción inválida" si no es una opción válida
+            return "main_menu"  # Simplemente espera sin enviar nada por ahora
+
+    return estado_usuario  # Si no hay cambios en el estado, se mantiene igual
+
+# Proceso principal
+def main():
+    nrf = setup_nrf()
+    conectar_wifi(SSID, PASSWORD)
+    
+    last_update_id = None
+    estado_usuario = "main_menu"  # Estado inicial en el menu principal
+    
+    # Enviar mensaje inicial al comenzar
+    enviar_mensaje("Para ver las opciones escribe menu.")
+    
+    while True:
+        # Procesar datos del NRF24L01
+        if nrf.any():
+            try:
+                message = nrf.recv()
+                if len(message) > 0:
+                    procesar_datos_sensor(message)
+            except Exception as e:
+                print("Error en la recepcion:", e)
+        
+        # Interacción con Telegram
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_update_id + 1 if last_update_id else ''}"
+        try:
+            response = urequests.get(url)
+            updates = response.json().get("result", [])
+            response.close()
+
+            for update in updates:
+                last_update_id = update["update_id"]
+                mensaje = update["message"].get("text", "")
+                
+                if mensaje.lower() == "menu":
+                    mostrar_menu_principal()
+                    estado_usuario = "main_menu"  # Restablecer el estado al menú principal
+
+                # Manejo de la opción seleccionada en el menú
+                estado_usuario = manejar_menu(mensaje, estado_usuario)
+        
+        except Exception as e:
+            print("Error al recibir actualizaciones:", e)
+        
+        time.sleep(1)
+
+if _name_ == "_main_":
+    main()
